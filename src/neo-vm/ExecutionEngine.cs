@@ -62,6 +62,14 @@ namespace Neo.VM
         public ExecutionContext EntryContext => InvocationStack.Count > 0 ? InvocationStack.Peek(InvocationStack.Count - 1) : null;
         public VMState State { get; internal protected set; } = VMState.BREAK;
 
+        #region Events
+
+        public event EventHandler<SyscalEventArgs> OnSysCall;
+        public event EventHandler<InstructionEventArgs> OnInstruction;
+        public event EventHandler<ExecutionContext> OnNewContext;
+
+        #endregion
+
         #region Limits
 
         /// <summary>
@@ -199,6 +207,9 @@ namespace Neo.VM
         {
             ExecutionContext context = CurrentContext;
             Instruction instruction = context.CurrentInstruction;
+
+            OnInstruction?.Invoke(this, new InstructionEventArgs() { Context = context, Instruction = instruction });
+
             if (instruction.OpCode >= OpCode.PUSHBYTES1 && instruction.OpCode <= OpCode.PUSHDATA4)
             {
                 if (!CheckMaxItemSize(instruction.Operand.Length)) return false;
@@ -296,8 +307,15 @@ namespace Neo.VM
                         }
                     case OpCode.SYSCALL:
                         {
-                            if (!OnSysCall(instruction.TokenU32) || !CheckStackSize(false, int.MaxValue))
+                            OnSysCall?.Invoke(this, new SyscalEventArgs() { Method = instruction.TokenU32 });
+
+                            if (!OnSysCallLogic(instruction.TokenU32) || !CheckStackSize(false, int.MaxValue))
+                            {
+                                OnSysCall?.Invoke(this, new SyscalEventArgs() { Method = instruction.TokenU32, Result = false });
                                 return false;
+                            }
+
+                            OnSysCall?.Invoke(this, new SyscalEventArgs() { Method = instruction.TokenU32, Result = true });
                             break;
                         }
 
@@ -1074,29 +1092,22 @@ namespace Neo.VM
         {
             if (InvocationStack.Count >= MaxInvocationStackSize)
                 throw new InvalidOperationException();
+
             InvocationStack.Push(context);
+            OnNewContext?.Invoke(this, context);
         }
 
         public ExecutionContext LoadScript(byte[] script, int rvcount = -1)
         {
-            ExecutionContext context = new ExecutionContext(new Script(script), CurrentContext?.Script, rvcount);
+            var context = new ExecutionContext(new Script(script), CurrentContext?.Script, rvcount);
             LoadContext(context);
             return context;
         }
 
-        protected virtual bool OnSysCall(uint method)
-        {
-            return false;
-        }
+        protected virtual bool OnSysCallLogic(uint method) => false;
 
-        protected virtual bool PostExecuteInstruction(Instruction instruction)
-        {
-            return true;
-        }
+        protected virtual bool PostExecuteInstruction(Instruction instruction) => true;
 
-        protected virtual bool PreExecuteInstruction()
-        {
-            return true;
-        }
+        protected virtual bool PreExecuteInstruction() => true;
     }
 }
